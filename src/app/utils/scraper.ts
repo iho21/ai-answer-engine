@@ -1,6 +1,7 @@
 import axios from "axios";
 import * as cheerio from "cheerio";
 import { Logger } from "./logger";
+import { Redis } from "@upstash/redis";
 
 const logger = new Logger("scraper");
 
@@ -20,6 +21,13 @@ function cleanText(text: string): string {
 }
 export async function scrapeUrl(url: string) {
   try {
+    logger.info(`Starting scrape process for ${url}`);
+    const cached = await getCachedContent(url);
+    if (cached) {
+      logger.info(`Using cached content for: ${url}`);
+      return cached;
+    }
+    logger.info(`Cache miss - proceeding with fresh scrape for: ${url}`);
     const response = await axios.get(url);
     const $ = cheerio.load(response.data);
 
@@ -84,7 +92,7 @@ export async function scrapeUrl(url: string) {
     ].join(" ");
 
     combinedContent = cleanText(combinedContent).slice(0, 40000);
-    return {
+    const finalResponse = {
       url,
       title: cleanText(title),
       headings: {
@@ -95,6 +103,8 @@ export async function scrapeUrl(url: string) {
       content: combinedContent,
       error: null,
     };
+
+    await cacheContent(url, finalResponse);
   } catch (error) {
     console.error(`Error scraping ${url}`, error);
     return {
@@ -121,6 +131,21 @@ export interface ScrapedContent {
   cachedAt?: number;
 }
 
+function isValidScrapedContent(data: any): data is ScrapedContent {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    typeof data.url === "string" &&
+    typeof data.title === "string" &&
+    typeof data.headings === "object" &&
+    typeof data.headings.h1 === "string" &&
+    typeof data.headings.h2 === "string" &&
+    typeof data.metaDescription === "string" &&
+    typeof data.content === "string" &&
+    (data.error === null || typeof data.error === "string")
+  );
+}
+
 function getCacheKey(url: string): string {
   const sanitizedUrl = url.substring(0, 200);
   return `scrape:${sanitizedUrl}`;
@@ -135,7 +160,6 @@ async function getCachedContent(url: string): Promise<ScrapedContent | null> {
     if (!cached) {
       logger.info(`Cache miss - No cached content found for: ${url}`);
       return null;
-
     }
 
     logger.info(`Cache hit - Found cached content for: ${url}`);
@@ -171,7 +195,6 @@ async function getCachedContent(url: string): Promise<ScrapedContent | null> {
 async function cacheContent(
   url: string,
   content: ScrapedContent
-
 ): Promise<void> {
   try {
     const cacheKey = getCacheKey(url);
@@ -186,11 +209,10 @@ async function cacheContent(
     if (serialized.length > MAX_CACHE_SIZE) {
       logger.warn(
         `Content too large to cache for URL: ${url} (${serialized.length} bytes)`
-
       );
       return;
     }
-    await redis.set(cacheKey, serialized, {ex: CACHE_TTL});
+    await redis.set(cacheKey, serialized, { ex: CACHE_TTL });
     logger.info(
       `Successfully cached content for: ${url} (${serialized.length} bytes, TTL: ${CACHE_TTL})`
     );

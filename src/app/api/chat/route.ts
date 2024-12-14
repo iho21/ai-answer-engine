@@ -8,9 +8,10 @@ import { getGroqResponse } from "@/app/utils/groqClient";
 import { scrapeUrl, urlPattern } from "@/app/utils/scraper";
 export async function POST(req: Request) {
   try {
-    const { message } = await req.json();
+    const { message, messages } = await req.json();
 
     console.log("message received:", message);
+    console.log("messages", messages);
 
     const url = message.match(urlPattern);
 
@@ -19,24 +20,34 @@ export async function POST(req: Request) {
       console.log("Url found", url);
       const scraperResponse = await scrapeUrl(url);
       console.log("Scraped content", scrapedContent);
-      scrapedContent = scraperResponse.content;
+      if (scraperResponse) {
+        scrapedContent = scraperResponse.content;
+      }
     }
 
-    const userQuery = message.replace(url ? url[0] : '', '').trim();
+    const userQuery = message.replace(url ? url[0] : "", "").trim();
 
-    const prompt =
-    `Answer my question: "${userQuery}"
+    const userPrompt = `Answer my question: "${userQuery}"
 
     Based on the following content:
     <content>
       ${scrapedContent}
-    </content>`
+    </content>`;
+    const llmMessages = [
+      ...messages,
+      {
+        role: "user",
+        content: userPrompt,
+      },
+    ];
 
-    console.log("PROMPT:", prompt)
-    const response = await getGroqResponse(message);
+    console.log("route.ts", llmMessages);
+    
+    const response = await getGroqResponse(llmMessages);
 
+    
     return NextResponse.json({ message: response });
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } catch (error) {
     return NextResponse.json({ message: "Error" });
   }
